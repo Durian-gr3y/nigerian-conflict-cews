@@ -358,7 +358,24 @@ function MapPinPicker({ lat, lng, onChange }: MapPinPickerProps) {
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: 'https://demotiles.maplibre.org/style.json',
+      style: {
+        version: 8,
+        sources: {
+          'osm-tiles': {
+            type: 'raster',
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            attribution: '© OpenStreetMap contributors',
+          },
+        },
+        layers: [
+          {
+            id: 'osm-tiles-layer',
+            type: 'raster',
+            source: 'osm-tiles',
+          },
+        ],
+      },
       center: [lng ?? 8.6753, lat ?? 9.082],
       zoom: lat ? 10 : 5,
     });
