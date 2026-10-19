@@ -27,14 +27,24 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models.database import (
-    AlertTypeEnum,
-    ConflictAlert,
-    RiskLevelEnum,
-    SubmissionChannelEnum,
-    VerificationStatusEnum,
-)
-from backend.services.pii_handler import create_pii_vault_entry
+try:
+    from models.database import (
+        AlertTypeEnum,
+        ConflictAlert,
+        RiskLevelEnum,
+        SubmissionChannelEnum,
+        VerificationStatusEnum,
+    )
+    from services.pii_handler import create_pii_vault_entry
+except ImportError:
+    from backend.models.database import (
+        AlertTypeEnum,
+        ConflictAlert,
+        RiskLevelEnum,
+        SubmissionChannelEnum,
+        VerificationStatusEnum,
+    )
+    from backend.services.pii_handler import create_pii_vault_entry
 
 logger = logging.getLogger(__name__)
 

@@ -78,7 +78,7 @@ celery_app = Celery(
     "cews",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=["backend.tasks.celery_app"],
+    include=["tasks.celery_app"],
 )
 
 celery_app.conf.update(
@@ -212,7 +212,7 @@ def process_ussd_report(self: Task, alert_id_str: str) -> dict:
     @_db_retry()
     def _run() -> dict:
         from sqlalchemy import select
-        from backend.models.database import ConflictAlert, RiskLevelEnum, VerificationStatusEnum
+        from models.database import ConflictAlert, RiskLevelEnum, VerificationStatusEnum
 
         alert_id = uuid.UUID(alert_id_str)
         db = _get_sync_db_session()
@@ -297,7 +297,7 @@ def process_web_report(self: Task, alert_id_str: str) -> dict:
     @_db_retry()
     def _run() -> dict:
         from sqlalchemy import select, func as sqlfunc
-        from backend.models.database import (
+        from models.database import (
             ConflictAlert,
             ReporterPIIVault,
             RiskLevelEnum,
@@ -420,7 +420,7 @@ def assign_wardens_to_alert(self: Task, alert_id_str: str) -> dict:
     @_db_retry()
     def _run() -> dict:
         from sqlalchemy import select, func as sqlfunc, and_
-        from backend.models.database import (
+        from models.database import (
             AccountStatusEnum,
             AlertVerification,
             AppUser,
@@ -556,7 +556,7 @@ def compute_zone_risk_score(self: Task, zone_id: Optional[int]) -> dict:
     @_db_retry()
     def _run() -> dict:
         from sqlalchemy import select, func as sqlfunc, and_
-        from backend.models.database import (
+        from models.database import (
             ConflictAlert,
             GeoZone,
             RiskLevelEnum,
@@ -702,7 +702,7 @@ def detect_coordinated_flood(self: Task) -> dict:
     @_db_retry()
     def _run() -> dict:
         from sqlalchemy import select, func as sqlfunc, and_, text
-        from backend.models.database import (
+        from models.database import (
             ConflictAlert,
             ReporterPIIVault,
             VerificationStatusEnum,
@@ -839,7 +839,7 @@ def _compute_heuristic_risk(alert: Any) -> float:
     TODO: Replace with a trained scikit-learn / XGBoost model loaded at
           worker startup for production.
     """
-    from backend.models.database import AlertTypeEnum
+    from models.database import AlertTypeEnum
 
     high_severity_types = {
         AlertTypeEnum.armed_clash,
@@ -881,7 +881,7 @@ def _compute_heuristic_risk(alert: Any) -> float:
 
 def _score_to_risk_level(score: float) -> Any:
     """Map a continuous risk score to a discrete RiskLevelEnum value."""
-    from backend.models.database import RiskLevelEnum
+    from models.database import RiskLevelEnum
 
     if score >= 0.75:
         return RiskLevelEnum.critical

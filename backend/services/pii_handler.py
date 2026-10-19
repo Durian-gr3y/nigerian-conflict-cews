@@ -32,7 +32,10 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models.database import ReporterPIIVault
+try:
+    from models.database import ReporterPIIVault
+except ImportError:
+    from backend.models.database import ReporterPIIVault
 
 logger = logging.getLogger(__name__)
 
