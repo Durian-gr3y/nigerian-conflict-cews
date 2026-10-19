@@ -1,0 +1,288 @@
+version: "3.9"
+
+# Nigeria CEWS — Docker Compose Production Configuration
+# Usage: docker compose -f docker-compose.yml up -d
+
+services:
+  # ─────────────────────────────────────────────────────────────
+  # PostgreSQL 15 + PostGIS 3.4
+  # ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgis/postgis:15-3.4-alpine
+    container_name: cews_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cews_db
+      POSTGRES_USER: cews_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cews_admin -d cews_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cews_internal
+
+  # ─────────────────────────────────────────────────────────────
+  # Redis 7 Cluster (Standalone for dev; use Redis Cluster in prod)
+  # ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: cews_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - cews_internal
+
+  # ─────────────────────────────────────────────────────────────
+  # FastAPI Backend (Ingestion + API)
+  # ─────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cews_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cews_admin:${POSTGRES_PASSWORD}@postgres:5432/cews_db
+      REDIS_URL: redis://redis:6379/0
+      CEWS_WEBHOOK_SECRET: ${CEWS_WEBHOOK_SECRET}
+      CEWS_PII_AES_KEY: ${CEWS_PII_AES_KEY}
+      CEWS_HMAC_SALT: ${CEWS_HMAC_SALT}
+      AFRICAS_TALKING_API_KEY: ${AFRICAS_TALKING_API_KEY}
+      AFRICAS_TALKING_USERNAME: ${AFRICAS_TALKING_USERNAME}
+      KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL}
+      ENVIRONMENT: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    networks:
+      - cews_internal
+      - cews_external
+    command: gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 60
+
+  # ─────────────────────────────────────────────────────────────
+  # Celery Workers — Priority queues
+  # ─────────────────────────────────────────────────────────────
+  celery_ingest:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cews_celery_ingest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cews_admin:${POSTGRES_PASSWORD}@postgres:5432/cews_db
+      REDIS_URL: redis://redis:6379/0
+      CEWS_PII_AES_KEY: ${CEWS_PII_AES_KEY}
+      CEWS_HMAC_SALT: ${CEWS_HMAC_SALT}
+      AFRICAS_TALKING_API_KEY: ${AFRICAS_TALKING_API_KEY}
+      AFRICAS_TALKING_USERNAME: ${AFRICAS_TALKING_USERNAME}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - cews_internal
+    command: celery -A tasks.celery_app worker -Q cews.ingest.high,cews.notify.dispatch --concurrency=4 --loglevel=info
+
+  celery_verify:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cews_celery_verify
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cews_admin:${POSTGRES_PASSWORD}@postgres:5432/cews_db
+      REDIS_URL: redis://redis:6379/0
+      CEWS_PII_AES_KEY: ${CEWS_PII_AES_KEY}
+      CEWS_HMAC_SALT: ${CEWS_HMAC_SALT}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - cews_internal
+    command: celery -A tasks.celery_app worker -Q cews.verify.pending --concurrency=2 --loglevel=info
+
+  celery_analytics:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cews_celery_analytics
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cews_admin:${POSTGRES_PASSWORD}@postgres:5432/cews_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - cews_internal
+    command: celery -A tasks.celery_app worker -Q cews.analytics.compute,cews.media.process --concurrency=2 --loglevel=info
+
+  # Celery Beat (scheduler for periodic tasks)
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cews_celery_beat
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cews_admin:${POSTGRES_PASSWORD}@postgres:5432/cews_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - cews_internal
+    command: celery -A tasks.celery_app beat --loglevel=info
+
+  # ─────────────────────────────────────────────────────────────
+  # pg_tileserv — PostGIS MVT Tile Server for MapLibre GL
+  # ─────────────────────────────────────────────────────────────
+  tileserv:
+    image: pramsey/pg_tileserv:latest
+    container_name: cews_tileserv
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://cews_admin:${POSTGRES_PASSWORD}@postgres:5432/cews_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "7800:7800"
+    networks:
+      - cews_internal
+      - cews_external
+
+  # ─────────────────────────────────────────────────────────────
+  # Next.js Frontend PWA
+  # ─────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cews_frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${API_BASE_URL:-http://localhost:8000}
+      NEXT_PUBLIC_TILESERV_URL: ${TILESERV_URL:-http://localhost:7800}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER_URL}
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    networks:
+      - cews_external
+
+  # ─────────────────────────────────────────────────────────────
+  # Nginx Reverse Proxy
+  # ─────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: cews_nginx
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - cews_external
+
+  # ─────────────────────────────────────────────────────────────
+  # Keycloak Identity Provider (Self-hosted for data sovereignty)
+  # ─────────────────────────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: cews_keycloak
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak_db
+      KC_DB_USERNAME: cews_admin
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - cews_internal
+      - cews_external
+    command: start
+
+  # ─────────────────────────────────────────────────────────────
+  # Prometheus + Grafana Observability Stack
+  # ─────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: cews_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - cews_internal
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: cews_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - cews_internal
+
+networks:
+  cews_internal:
+    driver: bridge
+    internal: true  # No external internet access for DB/Redis/workers
+  cews_external:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

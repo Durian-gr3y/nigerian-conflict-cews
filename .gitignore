@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.env.*
+!.env.example
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Node & Frontend dependencies
+node_modules/
+.next/
+out/
+build/
+dist/
+.npm
+.eslintcache
+
+# Logs and runtime data
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+celerybeat-schedule
+celerybeat.pid
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker / local data
+postgres_data/
+redis_data/
+prometheus_data/
+grafana_data/
+
+# Temporary / scratch
+tmp/
+scratch/
