@@ -70,7 +70,8 @@ function generateNonce(): Uint8Array {
 
 /** Encode a UTF-8 string to ArrayBuffer */
 function encodeUTF8(str: string): ArrayBuffer {
-  return new TextEncoder().encode(str);
+  const uint8 = new TextEncoder().encode(str);
+  return uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
 }
 
 /** Decode ArrayBuffer to UTF-8 string */
