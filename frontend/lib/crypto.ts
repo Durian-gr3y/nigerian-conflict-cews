@@ -205,7 +205,7 @@ export async function encryptPayload<T = unknown>(
   const plaintext = encodeUTF8(JSON.stringify(payload));
 
   const ciphertextBuffer = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce, tagLength: 128 },
+    { name: 'AES-GCM', iv: nonce as unknown as Uint8Array, tagLength: 128 },
     sessionKey,
     plaintext
   );
@@ -240,9 +240,9 @@ export async function decryptPayload<T = unknown>(
   let plaintextBuffer: ArrayBuffer;
   try {
     plaintextBuffer = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: nonce, tagLength: 128 },
+      { name: 'AES-GCM', iv: nonce as unknown as Uint8Array, tagLength: 128 },
       sessionKey,
-      ciphertext
+      ciphertext as unknown as Uint8Array
     );
   } catch {
     throw new Error('Decryption failed — the payload may be corrupt or the key incorrect.');
